@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fit-feet-finds",
+  "main": "worker/index.mjs",
+  "compatibility_date": "2026-11-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "keep_vars": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/uploads/*", "/telegram/*", "/health"]
+  },
+  "durable_objects": {
+    "bindings": [{"name": "SHOP", "class_name": "Shop"}]
+  },
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["Shop"]}],
+  "triggers": {"crons": ["* * * * *"]},
+  "vars": {
+    "BOT_USERNAME": "magazin_obuvi1_bot",
+    "PORTFOLIO_DEMO": "1"
+  }
+}
