@@ -2,6 +2,8 @@
 
 Telegram Mini App для магазина обуви. В одном проекте находятся витрина, панель управления, API и бот. Локальное демо работает на Node.js 24+ без внешней базы данных.
 
+[Публичная витрина](https://fit-feet-finds.darkecho-1.workers.dev) · [Бот магазина](https://t.me/magazin_obuvi1_bot)
+
 ## Локальное демо
 
 ```powershell
