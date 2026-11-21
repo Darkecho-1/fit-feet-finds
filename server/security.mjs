@@ -53,6 +53,10 @@ export function telegramHandle(value) {
   return handle;
 }
 
+export function telegramId(value) {
+  return typeof value === 'string' && /^[1-9]\d{0,15}$/.test(value) && Number.isSafeInteger(Number(value));
+}
+
 export function photoUrl(value) {
   const input = text(value, 600, 'Фото', 1);
   if (/^\/(assets|uploads)\/[a-zA-Z0-9_-]+\.(jpe?g|png|webp)$/i.test(input)) return input;

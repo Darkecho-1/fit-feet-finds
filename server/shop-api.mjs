@@ -1,4 +1,4 @@
-import { check, HttpError } from './security.mjs';
+import { check, HttpError, telegramId, text } from './security.mjs';
 import { miniAppLink } from './bot.mjs';
 
 export const maxImage = 6 * 1024 * 1024;
@@ -35,6 +35,24 @@ export async function shopApi({ method, path, session, config, demo, json, readJ
   if (path === '/api/orders' && method === 'POST') {
     limit(`orders:${session.key ?? user}`, 15);
     return json(store.createOrder(user, await readJson()), 201);
+  }
+  if (path === '/api/manager/question' && method === 'POST') {
+    limit(`manager:${user}`, 5);
+    const { question, product } = await readJson();
+    const message = text(question, 600, 'Ваш вопрос', 1);
+    const { manager } = store.settings();
+    check(!demo && telegramId(manager) && store.notify && config.botToken,
+      'Обращения через бота пока недоступны', 503);
+    check(store.get('SELECT reachable FROM users WHERE id=?', manager)?.reachable,
+      'Менеджер ещё не подключился к боту', 503);
+    const item = product ? store.products().find(entry => entry.id === product) : undefined;
+    check(!product || item, 'Карточка товара недоступна', 404);
+    const buyer = `Покупатель: ${actor.name}${actor.username ? ` (@${actor.username})` : ''}`;
+    const context = item ? `\nТовар: ${item.brand} ${item.name}\n${miniAppLink(config, 'p_' + item.id)}` : '';
+    store.enqueue(manager, JSON.stringify({
+      buyer: user, text: `Вопрос по магазину\n${buyer}${context}\n\n${message}\n\nОтветьте на это сообщение, чтобы бот передал ваш ответ покупателю.`,
+    }), 'manager_question');
+    return json({ ok: true }, 202);
   }
   if (!path.startsWith('/api/staff/')) throw new HttpError(404, 'Раздел не найден');
   check(actor.role !== 'buyer', 'Доступ только для команды магазина', 403);

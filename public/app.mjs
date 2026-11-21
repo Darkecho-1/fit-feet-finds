@@ -205,6 +205,7 @@ const sheetRenderers = {
   profile: () => shop.profile(state),
   'telegram-entry': () => shop.telegramEntry(state, sheet.page),
   manager: () => shop.manager(state, state.products.find(p => p.id === sheet.id)),
+  'manager-sent': () => shop.managerSent(state),
   filters: () => shop.filters(state),
   drop: () => staff.dropEditor(state),
   'buyer-order': () => shop.orderDetails(state.orders.find(o => o.id === sheet.id)),
@@ -710,9 +711,14 @@ const forms = {
     state.filters = { ...state.filters, size, sort, available: !!available };
     return () => { closeSheet(); render(); focusCatalog(); };
   },
-  'manager-form': form => {
-    const draft = form.dataset.prefix + form.elements.question.value.trim();
-    openTelegram(form.dataset.url + '?text=' + encodeURIComponent(draft));
+  'manager-form': async form => {
+    const question = form.elements.question.value.trim();
+    if (form.dataset.url) {
+      openTelegram(form.dataset.url + '?text=' + encodeURIComponent(form.dataset.prefix + question));
+      return;
+    }
+    await api('manager/question', { method: 'POST', data: { question, product: form.dataset.product } });
+    return () => openSheet('manager-sent');
   },
   'checkout-form': async form => {
     const data = values(form);

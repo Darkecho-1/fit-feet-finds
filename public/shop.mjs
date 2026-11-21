@@ -266,11 +266,20 @@ export function profile(state) {
 }
 
 export function manager(state, product) {
-  const href = `https://t.me/${state.settings.manager}`;
+  const contact = state.settings.manager;
+  const username = /^\d+$/.test(contact) ? state.settings.managerUsername : contact;
+  const href = username ? `https://t.me/${username}` : '';
   const prefix = product ? `Здравствуйте! Вопрос по модели ${productTitle(product)} (${product.color || product.category}).\n${state.demo && product.post ? product.post : productLink(state, product.id)}\n\n` : 'Здравствуйте! Вопрос по магазину.\n\n';
-  return `${sheetHead('Написать менеджеру', '@' + state.settings.manager)}
-    <form id="manager-form" class="sheet-pad form-stack" data-url="${h(href)}" data-prefix="${h(prefix)}">
+  return `${sheetHead('Написать менеджеру', username ? '@' + username : 'Вопрос через бота')}
+    <form id="manager-form" class="sheet-pad form-stack" data-url="${h(href)}" data-product="${h(product?.id)}" data-prefix="${h(prefix)}">
     ${product ? `<div class="checkout-line">${photo(product.images[0], '', 'small-photo', true)}<div><strong>${h(productTitle(product))}</strong><p>${h(product.color)}</p></div></div>` : ''}
-    <label>Ваш вопрос <span class="muted">по желанию</span><textarea name="question" maxlength="600" rows="3" placeholder="Например, есть ли размер 43?"></textarea></label>
-    <p class="small-print">Telegram откроет чат с готовым черновиком.</p><button class="button primary full" type="submit">${icon('telegram')} Открыть чат</button></form>`;
+    <label>Ваш вопрос ${href ? '<span class="muted">по желанию</span>' : ''}<textarea name="question" maxlength="600" rows="3" placeholder="Например, есть ли размер 43?" ${href ? '' : 'required'}></textarea></label>
+    <p class="small-print">${href ? 'Telegram откроет чат с готовым черновиком.' : 'Ответ менеджера придёт в чат бота.'}</p>
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${icon('telegram')} ${href ? 'Открыть чат' : 'Отправить вопрос'}</button></form>`;
+}
+
+export function managerSent(state) {
+  return `${sheetHead('Вопрос отправлен')}<div class="sheet-pad form-stack">
+    <p>Откройте чат бота и нажмите Start, если ещё с ним не общались. Здесь появится ответ менеджера.</p>
+    <a class="button primary full" href="${h(state.botLink)}?start=notifications" data-action="telegram">${icon('telegram')} Открыть чат бота</a></div>`;
 }

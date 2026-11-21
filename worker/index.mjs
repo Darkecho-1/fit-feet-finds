@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { deliverOutbox, handleBotUpdate, miniAppLink, telegramApi } from '../server/bot.mjs';
-import { check, HttpError, newToken, telegramIdentity } from '../server/security.mjs';
+import { check, HttpError, newToken, telegramIdentity, telegramId } from '../server/security.mjs';
 import { seedAssortment } from '../server/seed.mjs';
 import { imageType, maxImage, shopApi, startup } from '../server/shop-api.mjs';
 import { ShopStore } from '../server/shop-store.mjs';
@@ -22,7 +22,8 @@ function configuration(env) {
     botToken: env.BOT_TOKEN ?? '',
     botUsername: (env.BOT_USERNAME ?? '').replace(/^@/, ''),
     appShortName: env.APP_SHORT_NAME ?? '',
-    owner: /^[1-9]\d{0,15}$/.test(env.OWNER_ID ?? '') ? env.OWNER_ID : '',
+    owner: telegramId(env.OWNER_ID) ? env.OWNER_ID : '',
+    manager: telegramId(env.MANAGER_ID) ? env.MANAGER_ID : '',
     reminderDays: 3,
     portfolio: env.PORTFOLIO_DEMO === '1',
   };
@@ -123,6 +124,13 @@ export class Shop extends DurableObject {
       this.store.saveDrop({ mode: 'manual', productId: 'timberland-wheat' });
       this.setMeta('portfolio-seeded', '1');
     }
+    const { manager } = this.config;
+    if (manager && this.meta('manager-configured') !== manager) {
+      this.store.transaction(() => {
+        this.store.run("UPDATE config SET value=json_set(value,'$.manager',?) WHERE id=1", manager);
+        this.setMeta('manager-configured', manager);
+      });
+    }
   }
 
   meta(key) {
@@ -164,8 +172,14 @@ export class Shop extends DurableObject {
     const method = request.method;
     try {
       if (path === '/health' && method === 'GET') {
-        return json({ ok: true, botReady: Boolean(config.botToken && config.publicUrl &&
-          this.meta('webhook') === this.webhookVersion()), ownerConfigured: Boolean(config.owner) });
+        const configured = Boolean(config.botToken && config.publicUrl);
+        const botReady = configured && this.meta('webhook') === this.webhookVersion();
+        return json({
+          ok: true, botReady, ownerConfigured: Boolean(config.owner),
+          botStatus: configured ? this.meta('bot-status') ?? 'waiting' : 'unconfigured',
+          telegramDelivery: botReady ? this.meta('telegram-delivery') ?? 'waiting' : 'waiting',
+          lastBotReplyAt: Number(this.meta('bot-reply-at') ?? 0) || null,
+        });
       }
       if (path === webhookPath) return await this.webhook(request);
       if (path.startsWith('/uploads/')) return this.photo(path, method);
@@ -195,7 +209,9 @@ export class Shop extends DurableObject {
         readJson: () => readJson(request), limit: (key, max) => this.limit(key, max),
         upload: () => this.upload(request),
       });
-      if (path === '/api/orders' || path.startsWith('/api/staff/order/')) this.ctx.waitUntil(this.deliver());
+      if (path === '/api/orders' || path === '/api/manager/question' || path.startsWith('/api/staff/order/')) {
+        this.ctx.waitUntil(this.deliver());
+      }
       return response;
     } catch (error) {
       if (!(error instanceof HttpError)) console.error('Shop request:', error.code ?? '', error.name);
@@ -249,14 +265,27 @@ export class Shop extends DurableObject {
     if (this.updatesInFlight.has(id)) return json({ error: 'Обновление обрабатывается' }, 503);
     this.updatesInFlight.add(id);
     try {
-      await handleBotUpdate(this.store, this.config, this.api, update);
+      let replied = false;
+      try {
+        await handleBotUpdate(this.store, this.config, async (method, payload) => {
+          const result = await this.api(method, payload);
+          if (method === 'sendMessage') replied = true;
+          return result;
+        }, update);
+      } catch (error) {
+        if (error.code !== 403) {
+          console.warn('Telegram webhook reply:', error.code ?? error.name);
+          throw error;
+        }
+      }
       this.store.run('INSERT INTO worker_updates VALUES (?,?)', id, Date.now() + 2 * 86400000);
+      if (replied) this.setMeta('bot-reply-at', String(Date.now()));
       return json({ ok: true });
     } finally { this.updatesInFlight.delete(id); }
   }
 
   webhookVersion() {
-    return tokenHash(`${this.config.publicUrl}:1:${this.config.botToken}`);
+    return tokenHash(`${this.config.publicUrl}:${this.config.botUsername}:2:${this.config.botToken}`);
   }
 
   async maintain() {
@@ -266,10 +295,18 @@ export class Shop extends DurableObject {
     store.run('DELETE FROM worker_updates WHERE expires<=?', now);
     if (!config.botToken || !config.publicUrl) return;
     const version = this.webhookVersion();
-    if (this.meta('webhook') !== version || Number(this.meta('webhook-verified') ?? 0) <= now - 3600000) {
+    if (this.meta('webhook') !== version || Number(this.meta('webhook-verified') ?? 0) <= now - 60000) {
       try {
+        const current = this.meta('webhook') === version;
+        if (!current) {
+          const bot = await this.api('getMe');
+          if (bot.username?.toLowerCase() !== config.botUsername.toLowerCase()) {
+            this.setMeta('bot-status', 'bot_username_mismatch');
+            return;
+          }
+        }
         const webhook = await this.api('getWebhookInfo');
-        if (webhook.url !== config.publicUrl + webhookPath || this.meta('webhook') !== version) {
+        if (webhook.url !== config.publicUrl + webhookPath || !current) {
           await this.api('setWebhook', {
             url: config.publicUrl + webhookPath, secret_token: webhookSecret(config.botToken),
             allowed_updates: ['message'], max_connections: 5,
@@ -280,7 +317,17 @@ export class Shop extends DurableObject {
         }
         this.setMeta('webhook', version);
         this.setMeta('webhook-verified', String(now));
-      } catch (error) { console.warn('Telegram webhook setup:', error.code ?? error.name); }
+        this.setMeta('bot-status', 'registered');
+        const failure = Number(webhook.last_error_date ?? 0) * 1000;
+        const lastReply = Number(this.meta('bot-reply-at') ?? 0);
+        const status = /webhook:\s+(\d{3})/i.exec(webhook.last_error_message ?? '')?.[1];
+        const deliveryError = failure > lastReply && failure > now - 3600000;
+        this.setMeta('telegram-delivery', deliveryError ? (status ? `http_${status}` : 'delivery_error') :
+          webhook.pending_update_count > 0 ? 'pending' : lastReply ? 'reply_sent' : 'waiting');
+      } catch (error) {
+        this.setMeta('bot-status', error.code === 401 ? 'invalid_token' : 'telegram_api_error');
+        console.warn('Telegram webhook setup:', error.code ?? error.name);
+      }
     }
     if (Number(this.meta('reminders') ?? 0) <= now - 1800000) {
       store.reminders(config.reminderDays);

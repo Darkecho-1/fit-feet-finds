@@ -4,7 +4,9 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { Store } from '../server/store.mjs';
 import { seedAssortment } from '../server/seed.mjs';
 import { telegramIdentity } from '../server/security.mjs';
-import { cartItems, checkoutTotal } from '../public/shop.mjs';
+import { deliverOutbox, handleBotUpdate } from '../server/bot.mjs';
+import { shopApi } from '../server/shop-api.mjs';
+import { cartItems, checkoutTotal, manager } from '../public/shop.mjs';
 import { staffOrder } from '../public/staff.mjs';
 import { dropBanner, resolveDrop } from '../public/drop.mjs';
 
@@ -185,6 +187,43 @@ test('order contact uses the latest Telegram profile and is restricted to staff'
   assert.ok(new URL(href).searchParams.get('text').includes(placed.id));
   store.changeAdmin('102', true);
   assert.equal(store.orderContact('102', placed.id), undefined);
+});
+
+test('manager ID opens the registered username or routes questions and replies through the bot', async t => {
+  const { store, product } = fixture(t);
+  const config = { botToken: 'test', botUsername: 'shop_test_bot' };
+  const question = {
+    path: '/api/manager/question', method: 'POST', session: { store, user: '101' },
+    config, json: (_value, status) => status, limit: () => {},
+    readJson: async () => ({ product: product.id, question: 'Есть 42 размер?' }),
+  };
+  store.saveSettings({ ...store.settings(), manager: '100' });
+  await assert.rejects(shopApi(question), { status: 503 });
+  store.register({ id: 100, first_name: 'Менеджер' }, { reachable: true });
+  assert.match(manager({ settings: store.settings() }), /Отправить вопрос/);
+  assert.equal(await shopApi(question), 202);
+  const sends = [];
+  const api = async (method, payload) => {
+    assert.equal(method, 'sendMessage');
+    sends.push(payload);
+    return { message_id: sends.length };
+  };
+  await deliverOutbox(store, config, api);
+  assert.equal(sends[0].chat_id, '100');
+  assert.ok(sends[0].text.includes('p_' + product.id));
+  assert.equal(sends[0].reply_markup.force_reply, true);
+  const update = id => ({
+    message: { from: { id }, chat: { type: 'private' }, text: 'Да, в наличии',
+      reply_to_message: { message_id: 1 } },
+  });
+  await handleBotUpdate(store, config, api, update(102));
+  assert.equal(sends.length, 1);
+  await handleBotUpdate(store, config, api, update(100));
+  await deliverOutbox(store, config, api);
+  assert.equal(sends[2].chat_id, '101');
+  assert.match(sends[2].text, /Да, в наличии/);
+  store.register({ id: 100, username: 'manager_test' }, { reachable: true });
+  assert.match(manager({ settings: store.settings() }), /data-url="https:\/\/t\.me\/manager_test"/);
 });
 
 test('production import keeps the 26 source cards in drafts with zero stock', t => {

@@ -134,7 +134,7 @@ export function settings(state) {
     <form id="settings-form" class="admin-panel settings-panel form-stack">
       <h2>Информация о магазине</h2>
       <label>Название<input name="name" required maxlength="50" value="${h(info.name)}"></label>
-      <div class="split-form"><label>Менеджер в Telegram<input name="manager" required maxlength="33" value="@${h(info.manager)}"></label>
+      <div class="split-form"><label>Менеджер в Telegram<input name="manager" required maxlength="33" placeholder="Telegram ID или @username" value="${/^\d+$/.test(info.manager) ? '' : '@'}${h(info.manager)}"></label>
       <label>Канал магазина<input name="channel" required maxlength="33" value="@${h(info.channel)}"></label></div>
       <label>О магазине<textarea name="about" required rows="3" maxlength="1200">${h(info.about)}</textarea></label>
       <label>Условия заказа<textarea name="terms" required rows="3" maxlength="1600">${h(info.terms)}</textarea></label>

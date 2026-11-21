@@ -28,6 +28,8 @@ npm.cmd run demo
 3. Напишите боту `/id` и добавьте полученный номер как переменную `OWNER_ID` в тех же настройках Worker. Затем отправьте боту `/start` и откройте панель. Установить роль владельца можно только через конфигурацию серверной части.
 4. В BotFather выберите бота, откройте **Bot Settings → Configure Mini App → Enable Mini App** и укажите тот же HTTPS-адрес как **Main Mini App**. После этого ссылки вида `https://t.me/имя_бота?startapp=p_товар` будут вести прямо к карточке товара.
 
+В настройках магазина контакт менеджера можно указать по Telegram ID или публичному `@username`. При выборе ID менеджер сначала отправляет боту `/start`. Если у менеджера есть юзернейм, покупатель открывает личный чат с черновиком. Иначе бот передаёт вопрос с карточкой и доставляет ответ покупателю. Переменная Worker `MANAGER_ID` задаёт сохраняемый контакт при первом запуске или при изменении её значения.
+
 Токен хранится в секретах Worker. Для локальной проверки используйте `npm run worker:dev` и отдельный файл `.dev.vars`, который исключён из Git. Для рабочего магазина можно поставить `PORTFOLIO_DEMO=0` перед первым запуском, заполнить свой каталог и настроить действующий Telegram-контакт менеджера. Переключение режима сохраняет ранее созданные данные.
 
 [Документация Cloudflare Workers](https://developers.cloudflare.com/workers/get-started/guide/) · [Тариф SQLite Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/) · [Telegram Main Mini App](https://core.telegram.org/bots/webapps#launching-the-main-mini-app)

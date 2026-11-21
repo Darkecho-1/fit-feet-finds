@@ -43,6 +43,15 @@ export async function handleBotUpdate(store, config, api, update) {
   const staff = actor.role !== 'buyer';
   const [raw = '', arg = ''] = (message.text ?? '').trim().split(/\s+/, 2);
   const command = raw.split('@')[0].toLowerCase();
+  if (raw && !raw.startsWith('/') && message.reply_to_message) {
+    const reply = store.get('SELECT buyer FROM manager_replies WHERE manager=? AND message=?',
+      actor.id, message.reply_to_message.message_id);
+    if (reply) {
+      store.enqueue(reply.buyer, `Менеджер FIT FEET FINDS:\n${message.text}`);
+      await send(api, actor.id, 'Ответ поставлен в очередь. Бот доставит его покупателю, когда чат будет доступен.');
+      return;
+    }
+  }
   if (command === '/start' && arg.startsWith('contact_')) {
     const orderId = /^contact_(FFF-[0-9A-F]{10})$/.exec(arg)?.[1];
     const contact = orderId && store.orderContact(actor.id, orderId);
@@ -81,8 +90,17 @@ export async function deliverOutbox(store, config, api, signal, batchSize = 20) 
   for (const event of pending) {
     if (!store.get('SELECT 1 FROM outbox WHERE id=?', event.id)) continue;
     try {
-      await send(api, event.user, event.message, event.app ? botButton(config, true) : undefined);
-      store.run('DELETE FROM outbox WHERE id=?', event.id);
+      if (event.kind === 'manager_question') {
+        const question = JSON.parse(event.message);
+        const sent = await send(api, event.user, question.text, { force_reply: true, input_field_placeholder: 'Ответ покупателю' });
+        store.transaction(() => {
+          store.run('INSERT OR REPLACE INTO manager_replies VALUES (?,?,?)', event.user, sent.message_id, question.buyer);
+          store.run('DELETE FROM outbox WHERE id=?', event.id);
+        });
+      } else {
+        await send(api, event.user, event.message, event.app ? botButton(config, true) : undefined);
+        store.run('DELETE FROM outbox WHERE id=?', event.id);
+      }
     } catch (error) {
       if (signal?.aborted) break;
       if (event.attempts >= 52) {

@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { check, integer, photoUrl, telegramHandle, text } from './security.mjs';
+import { check, integer, photoUrl, telegramHandle, telegramId, text } from './security.mjs';
 
 const defaultDrop = { mode: 'auto', productId: '', title: '', cover: '' };
 
@@ -54,6 +54,10 @@ const schema = `
     id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, message TEXT NOT NULL,
     app INTEGER NOT NULL, next INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT ''
   );
+  CREATE TABLE IF NOT EXISTS manager_replies (
+    manager TEXT NOT NULL, message INTEGER NOT NULL, buyer TEXT NOT NULL,
+    PRIMARY KEY (manager, message)
+  );
 `;
 
 const asProduct = (row) => ({ ...JSON.parse(row.value), id: row.id, status: row.status, updated: row.updated });
@@ -103,9 +107,11 @@ function validateSettings(input) {
     };
   });
   check(new Set(delivery.map(d => d.id)).size === delivery.length, 'Коды доставки должны быть уникальными');
+  const manager = text(input.manager, 33, 'Менеджер в Telegram', 1);
+  if (/^\d+$/.test(manager)) check(telegramId(manager), 'Укажите корректный Telegram ID менеджера');
   return {
     name: text(input.name, 50, 'Название', 1),
-    manager: telegramHandle(input.manager),
+    manager: telegramId(manager) ? manager : telegramHandle(manager),
     channel: telegramHandle(input.channel),
     about: text(input.about, 1200, 'О магазине', 1),
     terms: text(input.terms, 1600, 'Условия заказа', 1),
@@ -153,7 +159,12 @@ export class ShopStore {
     return this.actor(id);
   }
 
-  settings() { return { drop: { ...defaultDrop }, ...JSON.parse(this.get('SELECT value FROM config WHERE id=1').value) }; }
+  settings() {
+    const settings = { drop: { ...defaultDrop }, ...JSON.parse(this.get('SELECT value FROM config WHERE id=1').value) };
+    if (!telegramId(settings.manager)) return settings;
+    const managerUsername = this.get('SELECT username FROM users WHERE id=?', settings.manager)?.username ?? '';
+    return { ...settings, managerUsername };
+  }
 
   saveSettings(input) {
     const settings = validateSettings(input);
