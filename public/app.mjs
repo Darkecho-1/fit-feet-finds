@@ -11,6 +11,8 @@ const dock = byId('dock');
 const dialog = byId('sheet');
 const dialogBody = byId('sheet-body');
 const photoViewer = byId('photo-viewer');
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const easeOut = 'cubic-bezier(.23, 1, .32, 1)';
 const defaultFilters = () => ({ category: 'all', query: '', size: '', sort: 'recent', available: false });
 const state = {
   profile: null, page: 'catalog', view: 'shop', adminTab: 'overview',
@@ -27,6 +29,10 @@ let productRoute = false;
 let lastRefresh = 0;
 let booting = false;
 let sheetBusy = 0;
+let renderedPage;
+let pageMotion;
+let sheetMotion;
+let dockMarkup = '';
 
 async function api(path, options = {}) {
   const method = options.method ?? 'GET';
@@ -61,6 +67,9 @@ async function loadTelegram() {
     document.head.append(script);
   });
   tg = window.Telegram?.WebApp;
+  if (tg?.initData) document.documentElement.classList.add('telegram-app');
+  if (tg?.isVersionAtLeast?.('6.2')) tg.enableClosingConfirmation?.();
+  if (tg?.isVersionAtLeast?.('7.7')) tg.disableVerticalSwipes?.();
   tg?.ready?.();
   tg?.expand?.();
   try {
@@ -106,13 +115,22 @@ async function refreshOnReturn() {
 
 function render() {
   header.innerHTML = shop.header(state);
-  dock.innerHTML = state.profile ? shop.dock(state) : '';
-  dock.hidden = !state.profile;
-  dock.classList.toggle('staff-dock', state.view === 'admin');
+  renderDock();
   if (!state.profile) return;
   const buyer = { catalog: shop.catalog, cart: shop.cart, orders: shop.buyerOrders };
   const admin = { overview: staff.overview, inventory: staff.inventory, 'manage-orders': staff.manageOrders, settings: staff.settings };
-  main.innerHTML = state.view === 'admin' ? admin[state.adminTab](state) : buyer[state.page](state);
+  const isAdmin = state.view === 'admin';
+  const page = isAdmin ? state.adminTab : state.page;
+  const nextPage = `${state.view}/${page}`;
+  main.innerHTML = (isAdmin ? admin : buyer)[page](state);
+  if (renderedPage && renderedPage !== nextPage && !reducedMotion.matches && main.animate) {
+    const current = pageMotion?.playState === 'running' ? getComputedStyle(main) : null;
+    const from = current ? { opacity: current.opacity, transform: current.transform } :
+      { opacity: .65, transform: 'translateY(6px)' };
+    pageMotion?.cancel();
+    pageMotion = main.animate([from, { opacity: 1, transform: 'none' }], { duration: 200, easing: easeOut });
+  }
+  renderedPage = nextPage;
   if (byId('cart-select-all')) syncCartSelectAll(shop.cartItems(state));
   syncBack();
 }
@@ -125,7 +143,16 @@ function syncCartSelectAll(items) {
   control.indeterminate = selected > 0 && selected < available.length;
 }
 
-function renderDock() { dock.innerHTML = shop.dock(state); }
+function renderDock() {
+  dock.hidden = !state.profile;
+  dock.classList.toggle('staff-dock', state.view === 'admin');
+  const markup = state.profile ? shop.dock(state) : '';
+  if (markup === dockMarkup) return;
+  const focused = dock.contains(document.activeElement) ? document.activeElement.dataset.id : '';
+  dock.innerHTML = markup;
+  dockMarkup = markup;
+  if (focused) dock.querySelector(`[data-id="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+}
 
 function showToast(message) {
   clearTimeout(toastTimer);
@@ -234,6 +261,7 @@ function renderSheet(restore) {
 }
 
 function openSheet(type, options = {}, { reset = true } = {}) {
+  const changedSection = dialog.open && sheet?.type !== type;
   if (!dialog.open) returnFocus = document.activeElement;
   sheet = { type, ...options };
   renderSheet();
@@ -245,6 +273,10 @@ function openSheet(type, options = {}, { reset = true } = {}) {
     const first = [...dialog.querySelectorAll('[data-action="close"]')].find(el => el.getClientRects().length);
     first?.focus({ preventScroll: true });
   }
+  if (changedSection && !reducedMotion.matches && dialogBody.animate) {
+    sheetMotion?.cancel();
+    sheetMotion = dialogBody.animate([{ opacity: .65 }, { opacity: 1 }], { duration: 165, easing: easeOut });
+  }
   syncBack();
 }
 
@@ -253,6 +285,7 @@ function closeSheet(fromHistory = false) {
   const hadSheet = !!sheet;
   const wasSuccess = sheet?.type === 'success';
   sheet = undefined;
+  sheetMotion?.cancel();
   if (photoViewer.open) photoViewer.close();
   if (dialog.open) dialog.close();
   byId('sheet-notice').classList.remove('visible');
@@ -310,7 +343,7 @@ function chosenSize() {
     sheet.sizePrompt = 'Выберите доступный размер EU.';
     picker.classList.add('needs-size');
     if (!byId('size-feedback').textContent) byId('size-feedback').textContent = sheet.sizePrompt;
-    picker.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    picker.scrollIntoView({ block: 'center', inline: 'nearest', behavior: reducedMotion.matches ? 'instant' : 'smooth' });
     picker.querySelector('[data-action="size"]:enabled')?.focus({ preventScroll: true });
   }
   return { product, variant };
@@ -386,7 +419,7 @@ async function copy(value) {
 
 function focusCatalog(search = false) {
   if (state.view !== 'shop' || state.page !== 'catalog') go('catalog');
-  const options = { behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' };
+  const options = { behavior: reducedMotion.matches ? 'instant' : 'smooth' };
   byId('catalog-section').scrollIntoView(options);
   if (search) byId('catalog-search').focus({ preventScroll: true });
 }
