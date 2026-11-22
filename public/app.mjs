@@ -1,6 +1,6 @@
 import * as shop from './shop.mjs';
 import * as staff from './staff.mjs';
-import { galleryMarkup, selectPhoto, syncPhoto } from './gallery.mjs';
+import { galleryMarkup, interruptPhoto, selectPhoto, syncPhoto } from './gallery.mjs';
 import { attachPhotoZoom } from './photo-zoom.mjs';
 import { empty, h, icon, iconButton, productLink, productTitle, rub, sheetHead } from './ui.mjs';
 
@@ -27,6 +27,7 @@ let toastTimer;
 let cartBusy = false;
 let productRoute = false;
 let lastRefresh = 0;
+let refreshingOnReturn = false;
 let booting = false;
 let sheetBusy = 0;
 let renderedPage;
@@ -101,16 +102,17 @@ async function refresh() {
 }
 
 async function refreshOnReturn() {
-  if (!state.profile || state.demo || Date.now() - lastRefresh < 15000) return;
+  if (!state.profile || state.demo || refreshingOnReturn || cartBusy || sheetBusy || Date.now() - lastRefresh < 15000) return;
+  refreshingOnReturn = true;
   try {
     await refresh();
-    if (!sheet && !(document.activeElement instanceof HTMLInputElement) &&
+    if (!sheet && !cartBusy && !(document.activeElement instanceof HTMLInputElement) &&
         !(document.activeElement instanceof HTMLTextAreaElement) &&
         !(document.activeElement instanceof HTMLSelectElement) &&
         !(state.view === 'admin' && state.adminTab === 'settings')) render();
   } catch (error) {
     if (error.status === 401 && !sheet) showToast(error.message);
-  }
+  } finally { refreshingOnReturn = false; }
 }
 
 function render() {
@@ -265,7 +267,9 @@ function openSheet(type, options = {}, { reset = true } = {}) {
   if (!dialog.open) returnFocus = document.activeElement;
   sheet = { type, ...options };
   renderSheet();
-  byId('sheet-notice').classList.remove('visible');
+  const notice = byId('sheet-notice');
+  notice.classList.remove('visible');
+  notice.textContent = '';
   if (!dialog.open) dialog.showModal();
   if (type === 'product') selectPhoto(dialogBody.querySelector('[data-photo-gallery]'), sheet.image);
   if (reset) {
@@ -283,14 +287,12 @@ function openSheet(type, options = {}, { reset = true } = {}) {
 function closeSheet(fromHistory = false) {
   if (sheetBusy) return;
   const hadSheet = !!sheet;
-  const wasSuccess = sheet?.type === 'success';
   sheet = undefined;
   sheetMotion?.cancel();
   if (photoViewer.open) photoViewer.close();
   if (dialog.open) dialog.close();
   byId('sheet-notice').classList.remove('visible');
   if (hadSheet) clearProductRoute(fromHistory);
-  if (wasSuccess) go('catalog');
   if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
   returnFocus = undefined;
   syncBack();
@@ -301,20 +303,24 @@ function openProduct(id, initial = false) {
   openSheet('product', { id, image: 0 });
 }
 
-function changePhoto(gallery, index) {
+function changePhoto(gallery, index, smooth = !reducedMotion.matches) {
+  if (!gallery || sheet?.type !== 'product') return;
   const previous = Number(gallery.dataset.current);
-  const selected = selectPhoto(gallery, index);
-  if (photoViewer.contains(gallery) && selected !== previous) photoZoom?.reset();
-  if (selected !== undefined) sheet.image = selected;
+  const count = gallery.querySelector('.photo-track').childElementCount;
+  if (index >= 0 && index < count && index !== previous && photoViewer.contains(gallery)) {
+    photoZoom?.reset();
+  }
+  sheet.image = selectPhoto(gallery, index, smooth);
 }
 
-function stepPhoto(gallery, direction) {
-  changePhoto(gallery, Number(gallery.dataset.current) + direction);
+function stepPhoto(gallery, direction, smooth) {
+  changePhoto(gallery, Number(gallery.dataset.current) + direction, smooth);
 }
 
 function openPhoto(index) {
   const product = state.products.find(p => p.id === sheet.id);
   if (!product?.images[index]) return;
+  photoViewer.dataset.product = product.id;
   photoViewer.innerHTML = `${galleryMarkup(product, index, true)}
     <div class="photo-viewer-heading"><h2 id="photo-viewer-title">${h(productTitle(product))}</h2>
     ${iconButton('close', 'close-photo', 'Закрыть полноэкранный просмотр', 'autofocus')}</div>
@@ -325,8 +331,8 @@ function openPhoto(index) {
     </div>`;
   photoViewer.showModal();
   const gallery = photoViewer.querySelector('[data-photo-gallery]');
-  changePhoto(gallery, index);
-  photoZoom = attachPhotoZoom(photoViewer, direction => stepPhoto(gallery, direction));
+  sheet.image = selectPhoto(gallery, index);
+  photoZoom = attachPhotoZoom(photoViewer, direction => stepPhoto(gallery, direction), reducedMotion);
   photoViewer.querySelector('[data-action="close-photo"]').focus({ preventScroll: true });
 }
 
@@ -547,7 +553,7 @@ const actions = {
   },
   'buyer-order': el => openSheet('buyer-order', { id: el.dataset.id }),
   'success-orders': () => { closeSheet(); go('orders'); },
-  'success-catalog': () => closeSheet(),
+  'success-catalog': () => { closeSheet(); go('catalog'); },
   copy: el => copy(el.dataset.value),
   'demo-owner': () => demoRole('owner'),
   'demo-buyer': () => demoRole('buyer'),
@@ -624,20 +630,29 @@ document.addEventListener('click', async event => {
 
 dialog.addEventListener('cancel', event => { event.preventDefault(); closeSheet(); });
 photoViewer.addEventListener('close', () => {
+  if (photoViewer.open) return;
   photoZoom = undefined;
-  if (!dialog.open || sheet?.type !== 'product') return;
+  if (!dialog.open || sheet?.type !== 'product' || sheet.id !== photoViewer.dataset.product) return;
+  sheet.image = Number(photoViewer.querySelector('[data-photo-gallery]').dataset.current);
   const gallery = dialogBody.querySelector('[data-photo-gallery]');
   selectPhoto(gallery, sheet.image);
   gallery?.querySelector('.gallery-photo[tabindex="0"]')?.focus({ preventScroll: true });
 });
 
 for (const modal of [dialog, photoViewer]) {
+  const interrupt = event => {
+    const track = event.target.closest?.('.photo-track');
+    if (!track || sheet?.type !== 'product') return;
+    const index = interruptPhoto(track.closest('[data-photo-gallery]'));
+    if (index !== undefined) sheet.image = index;
+  };
+  if (modal === dialog) modal.addEventListener('pointerdown', interrupt, { passive: true });
+  modal.addEventListener('wheel', interrupt, { passive: true });
+
   modal.addEventListener('scroll', event => {
     if (!event.target.matches?.('.photo-track') || event.target.classList.contains('is-swiping')) return;
     const gallery = event.target.closest('[data-photo-gallery]');
-    const previous = Number(gallery.dataset.current);
     const index = syncPhoto(gallery);
-    if (modal === photoViewer && index !== previous) photoZoom?.reset();
     if (sheet?.type === 'product' && (photoViewer.open ? modal === photoViewer : modal === dialog)) sheet.image = index;
   }, { capture: true, passive: true });
 
@@ -647,10 +662,10 @@ for (const modal of [dialog, photoViewer]) {
     const gallery = modal.querySelector('[data-photo-gallery]');
     if (!gallery || !gallery.querySelector('[data-action="next-photo"]')) return;
     event.preventDefault();
-    stepPhoto(gallery, event.key === 'ArrowLeft' ? -1 : 1);
+    stepPhoto(gallery, event.key === 'ArrowLeft' ? -1 : 1, false);
   });
 }
-window.addEventListener('resize', () => { if (photoViewer.open) photoZoom?.reset(); });
+window.addEventListener('resize', () => { if (photoViewer.open) photoZoom?.resize(); });
 
 let pointerOutside = false;
 dialog.addEventListener('pointerdown', event => { pointerOutside = event.target === dialog; });
@@ -658,7 +673,10 @@ dialog.addEventListener('click', event => { if (pointerOutside && event.target =
 window.addEventListener('popstate', () => {
   if (photoViewer.open) photoViewer.close();
   const id = new URLSearchParams(location.search).get('product');
-  if (id && state.profile) openProduct(id, true);
+  if (id && state.profile) {
+    productRoute = Boolean(history.state?.fffProduct);
+    openProduct(id, true);
+  }
   else if (sheet?.type === 'product' || sheet?.type === 'checkout' || sheet?.type === 'manager') closeSheet(true);
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOnReturn(); });

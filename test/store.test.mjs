@@ -9,6 +9,14 @@ import { shopApi } from '../server/shop-api.mjs';
 import { cartItems, checkoutTotal, manager } from '../public/shop.mjs';
 import { staffOrder } from '../public/staff.mjs';
 import { dropBanner, resolveDrop } from '../public/drop.mjs';
+import { photoSwipeDirection } from '../public/photo-zoom.mjs';
+
+test('photo swipe advances on distance or a quick flick and ignores short slow drags', () => {
+  assert.equal(photoSwipeDirection(-85, 0, 390), 1);
+  assert.equal(photoSwipeDirection(22, .7, 390), -1);
+  assert.equal(photoSwipeDirection(-21, -.1, 390), 0);
+  assert.equal(photoSwipeDirection(-80, .9, 390), 0);
+});
 
 function fixture(t) {
   const store = new Store(':memory:', '100', true);

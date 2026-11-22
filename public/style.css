@@ -522,7 +522,12 @@ dialog::backdrop { background: #171d43a0; -webkit-backdrop-filter: blur(5px); ba
   width: max-content; max-width: calc(100% - 22px); padding: 4px; border-radius: 14px;
   overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
 }
-.thumbnails button { flex: 0 0 44px; display: block; padding: 0; width: 44px; height: 44px; border: 2px solid transparent; border-radius: 10px; overflow: hidden; background: #f4f5fa; }
+.thumbnails button {
+  flex: 0 0 44px; display: block; padding: 0; width: 44px; height: 44px; border: 2px solid transparent;
+  border-radius: 10px; overflow: hidden; background: #f4f5fa;
+  transition: border-color 160ms, transform 120ms var(--ease-out);
+}
+.thumbnails button:active { transform: scale(.94); }
 .thumbnails button:focus-visible { outline-offset: -3px; }
 .thumbnails button.is-active { border-color: var(--blue); }
 .thumbnails img { width: 100%; height: 100%; object-fit: cover; }
@@ -549,7 +554,9 @@ dialog::backdrop { background: #171d43a0; -webkit-backdrop-filter: blur(5px); ba
 .size-grid button {
   padding: 0 8px; min-width: 46px; min-height: 44px; border: 1px solid #d9e2f5;
   background: #fbfcff; border-radius: 10px; font-weight: 750; color: #344673;
+  transition: background-color 150ms, border-color 150ms, color 150ms, transform 120ms var(--ease-out);
 }
+.size-grid button:enabled:active { transform: scale(.96); }
 .size-grid button:hover { background: #eaf0ff; }
 .size-grid button.is-active { color: #fff; background: var(--blue); border-color: var(--blue); }
 .size-grid button:disabled { color: #65718b; border-color: #e1e6ef; background: #e9edf5; text-decoration: line-through; }
@@ -573,6 +580,18 @@ dialog::backdrop { background: #171d43a0; -webkit-backdrop-filter: blur(5px); ba
 #photo-viewer[open] { animation: photo-enter 150ms ease-out; }
 #photo-viewer::backdrop { background: #121621; -webkit-backdrop-filter: none; backdrop-filter: none; }
 @keyframes photo-enter { from { opacity: 0; } to { opacity: 1; } }
+@supports (transition-behavior: allow-discrete) and (overlay: auto) {
+  #photo-viewer {
+    opacity: 0; pointer-events: none;
+    transition: opacity 160ms var(--ease-out), overlay 160ms allow-discrete, display 160ms allow-discrete;
+  }
+  #photo-viewer[open] { opacity: 1; pointer-events: auto; animation: none; }
+  #photo-viewer::backdrop { opacity: 0; pointer-events: none; transition: opacity 160ms var(--ease-out); }
+  #photo-viewer[open]::backdrop { opacity: 1; pointer-events: auto; }
+  @starting-style {
+    #photo-viewer[open], #photo-viewer[open]::backdrop { opacity: 0; }
+  }
+}
 #photo-viewer .photo-track { touch-action: none; cursor: grab; }
 #photo-viewer .photo-track:active { cursor: grabbing; }
 #photo-viewer .photo-track.is-swiping { scroll-snap-type: none; }
