@@ -1,4 +1,8 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import {
+  botActionEmojiId, managerMessage, orderContactMessage, orderMessage, questionMessage, reminderMessage,
+  reminderSetting, telegramIdMessage, welcomeMessage,
+} from './bot-messages.mjs';
 
 export function miniAppLink(config, start = '') {
   if (!config.botUsername) return '';
@@ -6,11 +10,18 @@ export function miniAppLink(config, start = '') {
   return `https://t.me/${config.botUsername}${path}?startapp${start ? `=${encodeURIComponent(start)}` : ''}`;
 }
 
-function botButton(config, staff, start = '') {
+function botButton(config, staff, { product = '', order = '' } = {}) {
   const url = new URL(config.publicUrl);
   if (staff) url.searchParams.set('view', 'admin');
-  if (start) url.searchParams.set('product', start);
-  return { inline_keyboard: [[{ text: staff ? 'Открыть панель' : 'Открыть магазин', web_app: { url: url.href } }]] };
+  if (product) url.searchParams.set('product', product);
+  if (order) {
+    if (!staff) url.searchParams.set('view', 'shop');
+    url.searchParams.set('order', order);
+  }
+  const text = order ? 'Открыть заказ' : staff ? 'Открыть панель' : product ? 'Смотреть пару' : 'Открыть каталог';
+  return { inline_keyboard: [[{
+    text, style: 'primary', icon_custom_emoji_id: botActionEmojiId, web_app: { url: url.href },
+  }]] };
 }
 
 export function telegramApi(config, signal) {
@@ -32,9 +43,28 @@ export function telegramApi(config, signal) {
   };
 }
 
-const send = (api, id, text, markup) => api('sendMessage', {
-  chat_id: id, text, ...(markup && { reply_markup: markup }),
-});
+async function send(api, id, content, markup) {
+  const message = typeof content === 'string' ? { text: content } : content;
+  const payload = {
+    chat_id: id, ...message, link_preview_options: { is_disabled: true },
+    ...(markup && { reply_markup: markup }),
+  };
+  try { return await api('sendMessage', payload); }
+  catch (error) {
+    const buttons = markup?.inline_keyboard;
+    const hasCustomButton = buttons?.some(row => row.some(button => button.icon_custom_emoji_id));
+    const hasCustomEntity = message.entities?.some(entity => entity.type === 'custom_emoji');
+    if (error.code !== 400 || (!hasCustomButton && !hasCustomEntity)) throw error;
+    const fallback = { ...payload };
+    if (hasCustomEntity) fallback.entities = message.entities.filter(entity => entity.type !== 'custom_emoji');
+    if (hasCustomButton) {
+      fallback.reply_markup = { ...markup, inline_keyboard: buttons.map(row =>
+        row.map(({ icon_custom_emoji_id, ...button }) => button),
+      ) };
+    }
+    return api('sendMessage', fallback);
+  }
+}
 
 export async function handleBotUpdate(store, config, api, update) {
   const message = update.message;
@@ -47,7 +77,7 @@ export async function handleBotUpdate(store, config, api, update) {
     const reply = store.get('SELECT buyer FROM manager_replies WHERE manager=? AND message=?',
       actor.id, message.reply_to_message.message_id);
     if (reply) {
-      store.enqueue(reply.buyer, `Менеджер FIT FEET FINDS:\n${message.text}`);
+      store.enqueue(reply.buyer, message.text.slice(0, 3900), 'manager_answer');
       await send(api, actor.id, 'Ответ поставлен в очередь. Бот доставит его покупателю, когда чат будет доступен.');
       return;
     }
@@ -59,7 +89,7 @@ export async function handleBotUpdate(store, config, api, update) {
       await send(api, actor.id, 'Заказ недоступен.');
       return;
     }
-    const info = `Покупатель по заказу ${orderId}\n${contact.buyer}\nTelegram ID: ${contact.user}`;
+    const info = orderContactMessage(orderId, contact.buyer, contact.user);
     const url = contact.handle ? `https://t.me/${contact.handle}` : `tg://user?id=${contact.user}`;
     try {
       await send(api, actor.id, info, { inline_keyboard: [[{
@@ -68,21 +98,31 @@ export async function handleBotUpdate(store, config, api, update) {
       }]] });
     } catch (error) {
       if (error.code !== 400 || contact.handle) throw error;
-      await send(api, actor.id, `${info}\nTelegram не разрешил открыть профиль по ID.`);
+      await send(api, actor.id, orderContactMessage(orderId, contact.buyer, contact.user,
+        '\n\nTelegram не разрешил открыть профиль по ID.'));
     }
   } else if (command === '/id') {
-    await send(api, actor.id, `Ваш Telegram ID: ${actor.id}`);
+    await send(api, actor.id, telegramIdMessage(actor.id));
   } else if (staff && ['/reminders_on', '/reminders_off'].includes(command)) {
     const enabled = command === '/reminders_on';
     store.setReminders(actor.id, enabled);
-    await send(api, actor.id, enabled ? 'Напоминания включены.' : 'Напоминания выключены.');
+    await send(api, actor.id, reminderSetting(enabled));
   } else if (command === '/start' || (staff && command === '/panel')) {
-    const product = arg.startsWith('p_') && store.products().some(p => p.id === arg.slice(2)) ? arg.slice(2) : '';
+    const product = arg.startsWith('p_') ? store.products().find(p => p.id === arg.slice(2)) : undefined;
     const panel = staff && !product;
-    const note = panel ? 'Панель магазина. Здесь можно обработать заказы, обновить каталог и проверить остатки.' :
-      `Добро пожаловать в ${store.settings().name}! Откройте витрину, чтобы посмотреть пары и оформить заказ.`;
-    await send(api, actor.id, note, botButton(config, panel, product));
+    const title = product && (product.name.startsWith(product.brand) ? product.name : `${product.brand} ${product.name}`);
+    await send(api, actor.id, welcomeMessage(store.settings().name, panel, title), botButton(config, panel, { product: product?.id }));
   }
+}
+
+function notification(event, config) {
+  if (['order_created', 'staff_order', 'order_update'].includes(event.kind)) {
+    const order = JSON.parse(event.message);
+    return [orderMessage(event.kind, order), botButton(config, event.kind === 'staff_order', { order: order.id })];
+  }
+  if (event.kind === 'manager_answer') return [managerMessage(event.message)];
+  const content = event.kind === 'reminder' ? reminderMessage(event.message) : event.message;
+  return [content, event.app ? botButton(config, true) : undefined];
 }
 
 export async function deliverOutbox(store, config, api, signal, batchSize = 20) {
@@ -92,13 +132,13 @@ export async function deliverOutbox(store, config, api, signal, batchSize = 20) 
     try {
       if (event.kind === 'manager_question') {
         const question = JSON.parse(event.message);
-        const sent = await send(api, event.user, question.text, { force_reply: true, input_field_placeholder: 'Ответ покупателю' });
+        const sent = await send(api, event.user, questionMessage(question.text), { force_reply: true, input_field_placeholder: 'Ответ покупателю' });
         store.transaction(() => {
           store.run('INSERT OR REPLACE INTO manager_replies VALUES (?,?,?)', event.user, sent.message_id, question.buyer);
           store.run('DELETE FROM outbox WHERE id=?', event.id);
         });
       } else {
-        await send(api, event.user, event.message, event.app ? botButton(config, true) : undefined);
+        await send(api, event.user, ...notification(event, config));
         store.run('DELETE FROM outbox WHERE id=?', event.id);
       }
     } catch (error) {

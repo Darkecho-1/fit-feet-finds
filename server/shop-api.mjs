@@ -50,7 +50,7 @@ export async function shopApi({ method, path, session, config, demo, json, readJ
     const buyer = `Покупатель: ${actor.name}${actor.username ? ` (@${actor.username})` : ''}`;
     const context = item ? `\nТовар: ${item.brand} ${item.name}\n${miniAppLink(config, 'p_' + item.id)}` : '';
     store.enqueue(manager, JSON.stringify({
-      buyer: user, text: `Вопрос по магазину\n${buyer}${context}\n\n${message}\n\nОтветьте на это сообщение, чтобы бот передал ваш ответ покупателю.`,
+      buyer: user, text: `${buyer}${context}\n\n${message}\n\nОтветьте на это сообщение, чтобы бот передал ваш ответ покупателю.`,
     }), 'manager_question');
     return json({ ok: true }, 202);
   }

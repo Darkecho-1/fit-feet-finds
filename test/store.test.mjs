@@ -44,6 +44,41 @@ test('checkout is idempotent and reserves inventory once', t => {
   assert.throws(() => store.createOrder('102', order()), { status: 409 });
 });
 
+test('Telegram messages format orders and retry with standard emoji when premium icons are rejected', async t => {
+  const { store, order } = fixture(t);
+  const config = { publicUrl: 'https://fit.example', botUsername: 'shop_test_bot' };
+  const sent = [];
+  const api = async (_method, payload) => { sent.push(payload); return { message_id: sent.length }; };
+  const start = { message: { from: { id: 101, first_name: 'Алекс' }, chat: { type: 'private' }, text: '/start' } };
+  await handleBotUpdate(store, config, async (method, payload) => {
+    if (!sent.length) {
+      sent.push(payload);
+      throw Object.assign(new Error('Bad custom emoji'), { code: 400 });
+    }
+    return api(method, payload);
+  }, start);
+  const [premium, fallback] = sent;
+  assert.equal(premium.entities[0].type, 'custom_emoji');
+  assert.equal(premium.text.slice(0, premium.entities[0].length), '⭐');
+  assert.equal(premium.text.slice(premium.entities[1].offset, premium.entities[1].offset + premium.entities[1].length), 'FIT FEET FINDS');
+  assert.equal(fallback.text, premium.text);
+  assert.deepEqual(fallback.entities.map(entity => entity.type), ['bold']);
+  assert.equal(fallback.reply_markup.inline_keyboard[0][0].icon_custom_emoji_id, undefined);
+
+  const placed = store.createOrder('101', order());
+  await deliverOutbox(store, config, api);
+  const [, , buyer, staff] = sent;
+  assert.match(buyer.text, /Заказ принят/);
+  assert.match(staff.text, /Новый заказ/);
+  for (const [payload, view] of [[buyer, 'shop'], [staff, 'admin']]) {
+    const url = new URL(payload.reply_markup.inline_keyboard[0][0].web_app.url);
+    const code = payload.entities.find(entity => entity.type === 'code');
+    assert.equal(payload.text.slice(code.offset, code.offset + code.length), placed.id);
+    assert.equal(url.searchParams.get('order'), placed.id);
+    assert.equal(url.searchParams.get('view'), view);
+  }
+});
+
 test('invalid checkout leaves stock and cart unchanged', t => {
   const { store, variant, order } = fixture(t);
   const request = order();

@@ -179,6 +179,7 @@ export class Shop extends DurableObject {
           botStatus: configured ? this.meta('bot-status') ?? 'waiting' : 'unconfigured',
           telegramDelivery: botReady ? this.meta('telegram-delivery') ?? 'waiting' : 'waiting',
           lastBotReplyAt: Number(this.meta('bot-reply-at') ?? 0) || null,
+          botCustomEmoji: this.meta('bot-custom-emoji') ?? 'waiting',
         });
       }
       if (path === webhookPath) return await this.webhook(request);
@@ -266,10 +267,16 @@ export class Shop extends DurableObject {
     this.updatesInFlight.add(id);
     try {
       let replied = false;
+      let triedCustomEmoji = false;
+      let sentCustomEmoji = false;
       try {
         await handleBotUpdate(this.store, this.config, async (method, payload) => {
+          if (payload.entities?.some(entity => entity.type === 'custom_emoji')) triedCustomEmoji = true;
           const result = await this.api(method, payload);
-          if (method === 'sendMessage') replied = true;
+          if (method === 'sendMessage') {
+            replied = true;
+            sentCustomEmoji = result.entities?.some(entity => entity.type === 'custom_emoji') ?? false;
+          }
           return result;
         }, update);
       } catch (error) {
@@ -280,6 +287,7 @@ export class Shop extends DurableObject {
       }
       this.store.run('INSERT INTO worker_updates VALUES (?,?)', id, Date.now() + 2 * 86400000);
       if (replied) this.setMeta('bot-reply-at', String(Date.now()));
+      if (replied && triedCustomEmoji) this.setMeta('bot-custom-emoji', sentCustomEmoji ? 'accepted' : 'substituted');
       return json({ ok: true });
     } finally { this.updatesInFlight.delete(id); }
   }

@@ -205,7 +205,7 @@ export class ShopStore {
     if (remove) {
       this.transaction(() => {
         this.run('DELETE FROM admins WHERE id=?', id);
-        this.run("DELETE FROM outbox WHERE user=? AND kind IN ('staff','reminder')", id);
+        this.run("DELETE FROM outbox WHERE user=? AND kind IN ('staff','staff_order','reminder')", id);
       });
     } else this.run('INSERT OR IGNORE INTO admins VALUES (?)', id);
     return this.team();
@@ -332,9 +332,10 @@ export class ShopStore {
           this.run('UPDATE carts SET quantity=quantity-? WHERE user=? AND variant=?', item.quantity, user, item.variant);
         }
       }
-      this.enqueue(user, `Заказ ${id} оформлен. Сумма ${total.toLocaleString('ru-RU')} ₽. Статус и трек доставки появятся в разделе «Мои заказы».`);
+      const notification = JSON.stringify({ id, total });
+      this.enqueue(user, notification, 'order_created');
       for (const staff of this.staffIds()) {
-        this.enqueue(staff, `Новый заказ ${id} на ${total.toLocaleString('ru-RU')} ₽. Откройте панель магазина для обработки.`, 'staff');
+        this.enqueue(staff, notification, 'staff_order');
       }
       return { id, created, status: 'new', ...order };
     });
@@ -375,7 +376,7 @@ export class ShopStore {
       }
       if (status !== row.status) order.timeline.push({ status, at: Date.now() });
       if (status !== row.status || tracking !== order.tracking) {
-        this.enqueue(row.user, `Заказ ${id}. Статус: ${statusNames[status]}.${tracking ? ` Трек доставки: ${tracking}.` : ''}`);
+        this.enqueue(row.user, JSON.stringify({ id, status: statusNames[status], tracking }), 'order_update');
       }
       order.tracking = tracking;
       this.run('UPDATE orders SET value=?,status=? WHERE id=?', JSON.stringify(order), status, id);

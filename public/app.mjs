@@ -212,7 +212,7 @@ function addProductRoute(id) {
   productRoute = true;
 }
 
-function clearProductRoute(fromHistory = false) {
+function clearItemRoute(fromHistory = false) {
   const url = new URL(location.href);
   if (productRoute && !fromHistory && history.state?.fffProduct) {
     productRoute = false;
@@ -220,9 +220,10 @@ function clearProductRoute(fromHistory = false) {
     return;
   }
   productRoute = false;
-  if (!url.searchParams.has('product') && !url.searchParams.has('tgWebAppStartParam')) return;
+  if (!['product', 'tgWebAppStartParam', 'order'].some(key => url.searchParams.has(key))) return;
   url.searchParams.delete('product');
   url.searchParams.delete('tgWebAppStartParam');
+  url.searchParams.delete('order');
   history.replaceState(null, '', url);
 }
 
@@ -292,7 +293,7 @@ function closeSheet(fromHistory = false) {
   if (photoViewer.open) photoViewer.close();
   if (dialog.open) dialog.close();
   byId('sheet-notice').classList.remove('visible');
-  if (hadSheet) clearProductRoute(fromHistory);
+  if (hadSheet) clearItemRoute(fromHistory);
   if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
   returnFocus = undefined;
   syncBack();
@@ -894,11 +895,21 @@ async function start() {
     lastRefresh = Date.now();
     const startParam = state.start || params.get('tgWebAppStartParam') || '';
     const id = /^p_([\w-]{1,80})$/.exec(startParam)?.[1] || params.get('product');
+    const orderId = /^(FFF-[A-F0-9]{10})$/.exec(params.get('order'))?.[1];
     const wantsBuyer = id || params.get('view') === 'shop';
     state.view = !wantsBuyer && state.profile.role !== 'buyer' ? 'admin' : 'shop';
-    if (state.view === 'admin') state.staff = await api('staff/data');
+    const orderLink = !id && orderId && !state.guest;
+    const isAdmin = state.view === 'admin';
+    if (isAdmin) state.staff = await api('staff/data');
+    if (orderLink) {
+      if (isAdmin) state.adminTab = 'manage-orders';
+      else state.page = 'orders';
+    }
     render();
     if (id) openProduct(id, true);
+    else if (orderLink && (isAdmin ? state.staff.orders : state.orders).some(order => order.id === orderId)) {
+      openSheet(isAdmin ? 'staff-order' : 'buyer-order', { id: orderId });
+    }
   } catch (error) {
     main.innerHTML = empty('telegram', error.status === 401 ? 'Откройте магазин в Telegram' : 'Витрина недоступна',
       error.message, error.status === 401 && !tg?.initData ? '' : 'retry', 'Попробовать снова');
